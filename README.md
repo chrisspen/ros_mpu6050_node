@@ -6,8 +6,24 @@ Publishes IMU DMP sensor data from an MPU6050 connected to an I2C bus on a Raspb
 Installation
 ------------
 
-First install the [I2Cdevlib](https://github.com/jrowberg/i2cdevlib) and [Bcm2835](http://www.airspayce.com/mikem/bcm2835/index.html) libraries.
+First install [I2Cdevlib](https://github.com/jrowberg/i2cdevlib):
 
+    sudo mkdir -p /usr/share/arduino/libraries
+    cd /usr/share/arduino/libraries
+    sudo git clone https://github.com/chrisspen/i2cdevlib.git
+
+Note the fork should be used for now, since jrowberg's i2cdevlib has several outstanding bugs and is unmaintained.
+
+Then install [Bcm2835](http://www.airspayce.com/mikem/bcm2835/index.html):
+
+    cd /tmp
+    wget http://www.airspayce.com/mikem/bcm2835/bcm2835-1.50.tar.gz
+    tar zxvf bcm2835-1.50.tar.gz
+    ./configure
+    time make
+    make check
+    make install
+    
 Then clone the project into your ROS workspace via:
 
     git clone https://github.com/chrisspen/ros_mpu6050_node.git
