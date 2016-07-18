@@ -18,6 +18,11 @@
 #include "I2Cdev.h"
 #include "MPU6050_6Axis_MotionApps20.h"
 
+//Typically, motion processing algorithms should be run at a high rate, often around 200Hz,
+//in order to provide accurate results with low latency. This is required even if the application
+//updates at a much lower rate; for example, a low power user interface may update as slowly
+//as 5Hz, but the motion processing should still run at 200Hz.
+//Page 25 of MPU6050 datasheet.
 #define DEFAULT_SAMPLE_RATE_HZ	10
 
 #define MPU_FRAMEID "base_imu"
@@ -140,6 +145,19 @@ void loop(ros::NodeHandle pn, ros::NodeHandle n) {
     mag_msg.header.stamp = now;
     mag_msg.header.frame_id = frame_id;
 
+    // http://www.i2cdevlib.com/forums/topic/4-understanding-raw-values-of-accelerometer-and-gyrometer/
+	//The output scale for any setting is [-32768, +32767] for each of the six axes.
+    //The default setting in the I2Cdevlib class is +/- 2g for the accel and +/- 250 deg/sec
+    //for the gyro. If the device is perfectly level and not moving, then:
+	//
+	//    X/Y accel axes should read 0
+	//    Z accel axis should read 1g, which is +16384 at a sensitivity of 2g
+	//    X/Y/Z gyro axes should read 0
+	//
+	//In reality, the accel axes won't read exactly 0 since it is difficult to be perfectly level
+    //and there is some noise/error, and the gyros will also not read exactly 0 for the same
+    //reason (noise/error).
+
     // get current FIFO count
     fifoCount = mpu.getFIFOCount();
 
@@ -187,31 +205,42 @@ void loop(ros::NodeHandle pn, ros::NodeHandle n) {
 //            if(debug) printf("euler %7.2f %7.2f %7.2f    ", euler[0] * 180/M_PI, euler[1] * 180/M_PI, euler[2] * 180/M_PI);
 //        #endif
 
+		// http://docs.ros.org/api/sensor_msgs/html/msg/Imu.html
+		// Accelerations should be in m/s^2 (not in g's), and rotational velocity should be in rad/sec
+
         #ifdef OUTPUT_READABLE_YAWPITCHROLL
             // display Euler angles in degrees
             mpu.dmpGetQuaternion(&q, fifoBuffer);
             mpu.dmpGetGravity(&gravity, &q);
             mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
 
-            imu_msg.angular_velocity.x = ypr[2] * 180/M_PI;
-            imu_msg.angular_velocity.y = ypr[1] * 180/M_PI;
-            imu_msg.angular_velocity.z = ypr[0] * 180/M_PI;
+            // Should be in rad/sec.
+            imu_msg.angular_velocity.x = ypr[2];
+            imu_msg.angular_velocity.y = ypr[1];
+            imu_msg.angular_velocity.z = ypr[0];
 
-            if(debug) printf("ypr  %7.2f %7.2f %7.2f    ", ypr[0] * 180/M_PI, ypr[1] * 180/M_PI, ypr[2] * 180/M_PI);
+            if(debug) printf("ypr (degrees)  %7.2f %7.2f %7.2f    ", ypr[0] * 180/M_PI, ypr[1] * 180/M_PI, ypr[2] * 180/M_PI);
         #endif
 
         #ifdef OUTPUT_READABLE_REALACCEL
             // display real acceleration, adjusted to remove gravity
+            // https://github.com/jrowberg/i2cdevlib/blob/master/Arduino/MPU6050/MPU6050_6Axis_MotionApps20.h
             mpu.dmpGetQuaternion(&q, fifoBuffer);
             mpu.dmpGetAccel(&aa, fifoBuffer);
             mpu.dmpGetGravity(&gravity, &q);
             mpu.dmpGetLinearAccel(&aaReal, &aa, &gravity);
 
-            imu_msg.linear_acceleration.x = aaReal.x;
-            imu_msg.linear_acceleration.y = aaReal.y;
-            imu_msg.linear_acceleration.z = aaReal.z;
+            // By default, accel is in arbitrary units with a scale of 16384/1g.
+            // Per http://www.ros.org/reps/rep-0103.html
+            // and http://docs.ros.org/api/sensor_msgs/html/msg/Imu.html
+            // should be in m/s^2.
+            // 1g = 9.80665 m/s^2, so we go arbitrary -> g -> m/s^s
+            imu_msg.linear_acceleration.x = aaReal.x * 1/16384. * 9.80665;
+            imu_msg.linear_acceleration.y = aaReal.y * 1/16384. * 9.80665;
+            imu_msg.linear_acceleration.z = aaReal.z * 1/16384. * 9.80665;
 
-            if(debug) printf("areal %6d %6d %6d    ", aaReal.x, aaReal.y, aaReal.z);
+            if(debug) printf("areal (raw) %6d %6d %6d    ", aaReal.x, aaReal.y, aaReal.z);
+            if(debug) printf("areal (m/s^2) %6d %6d %6d    ", imu_msg.linear_acceleration.x, imu_msg.linear_acceleration.y, imu_msg.linear_acceleration.z);
         #endif
 
 		imu_pub.publish(imu_msg);
