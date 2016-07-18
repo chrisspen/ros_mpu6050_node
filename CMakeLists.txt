@@ -1,5 +1,8 @@
+# http://wiki.ros.org/catkin/CMakeLists.txt
 cmake_minimum_required(VERSION 2.8.3)
-project(mpu6050)
+project(ros_mpu6050_node)
+
+set( PATH_I2CDEVLIB "/usr/share/arduino/libraries/i2cdevlib/" )
 
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
@@ -72,10 +75,11 @@ catkin_package(
 
 ## Specify additional locations of header files
 ## Your package locations should be listed before other locations
-# include_directories(include)
 include_directories(
    include  ${catkin_INCLUDE_DIRS}
-#src/linux-mpu9150/glue src/linux-mpu9150/eMPL src/linux-mpu9150/mpu9150
+    #src/linux-mpu9150/glue src/linux-mpu9150/eMPL src/linux-mpu9150/mpu9150
+    ${PATH_I2CDEVLIB}RaspberryPi_bcm2835/I2Cdev
+    ${PATH_I2CDEVLIB}Arduino/MPU6050/
 )
 
 ## Declare a cpp library
@@ -84,18 +88,21 @@ include_directories(
 # )
 
 ## Declare a cpp executable
-add_executable(
-mpu6050_node
-src/mpu6050_node.cpp
+add_executable(mpu6050_node
+    src/mpu6050_node.cpp
+    ${PATH_I2CDEVLIB}RaspberryPi_bcm2835/I2Cdev/I2Cdev.cpp
+    ${PATH_I2CDEVLIB}Arduino/MPU6050/MPU6050.cpp
 )
 
 ## Add cmake target dependencies of the executable/library
 ## as an example, message headers may need to be generated before nodes
-add_dependencies(mpu6050_node mpu6050_generate_messages_cpp)
+#add_dependencies(mpu6050_node mpu6050_generate_messages_cpp)
 
 ## Specify libraries to link a library or executable target against
 target_link_libraries(mpu6050_node
    ${catkin_LIBRARIES}
+   bcm2835
+   m
 )
 
 #############
@@ -132,16 +139,3 @@ target_link_libraries(mpu6050_node
 #   # myfile2
 #   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
 # )
-
-#############
-## Testing ##
-#############
-
-## Add gtest based cpp test target and link libraries
-# catkin_add_gtest(${PROJECT_NAME}-test test/test_mpu6050.cpp)
-# if(TARGET ${PROJECT_NAME}-test)
-#   target_link_libraries(${PROJECT_NAME}-test ${PROJECT_NAME})
-# endif()
-
-## Add folders to be run by python nosetests
-# catkin_add_nosetests(test)

@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <math.h>
+#include <signal.h>
 
 #include <ros/ros.h>
 #include <sensor_msgs/Imu.h>
@@ -17,6 +18,10 @@
 #include "I2Cdev.h"
 #include "MPU6050_6Axis_MotionApps20.h"
 
+#define DEFAULT_SAMPLE_RATE_HZ	10
+
+#define MPU_FRAMEID "base_imu"
+
 //#include "AccelGyroSensorOffsets.h"
 
 ros::Publisher imu_calib_pub;
@@ -28,8 +33,6 @@ ros::ServiceClient * clientptr;
 // AD0 low = 0x68 (default for SparkFun breakout and InvenSense evaluation board)
 // AD0 high = 0x69
 MPU6050 mpu;
-
-#define MPU_FRAMEID "base_imu"
 
 // uncomment "OUTPUT_READABLE_QUATERNION" if you want to see the actual
 // quaternion components in a [w, x, y, z] format (not best for parsing
@@ -85,20 +88,219 @@ float ypr[3];           // [yaw, pitch, roll]   yaw/pitch/roll container and gra
 
 int sample_rate;
 std::string frame_id;
-ros::NodeHandle pn;
-ros::NodeHandle n;
+//ros::NodeHandle pn;
+//ros::NodeHandle n;
+
+// mpu offsets
+int ax, ay, az, gx, gy, gz;
+
+bool debug = false;
+
+// AD0 low = 0x68 (default for SparkFun breakout and InvenSense evaluation board)
+// AD0 high = 0x69
+bool ado = false;
+
+double angular_velocity_covariance, pitch_roll_covariance, yaw_covariance, linear_acceleration_covariance;
+double linear_acceleration_stdev_, angular_velocity_stdev_, yaw_stdev_, pitch_roll_stdev_;
+
+ros::Publisher imu_pub;
+ros::Publisher imu_euler_pub;
+ros::Publisher mag_pub;
+
+void mySigintHandler(int sig){
+	ROS_INFO("Shutting down mpu6050_node...");
+
+	mpu.reset();
+
+	// All the default sigint handler does is call shutdown()
+	ros::shutdown();
+}
 
 // ================================================================
-// ===                      INITIAL SETUP                       ===
+// ===                    MAIN PROGRAM LOOP                     ===
 // ================================================================
 
-void setup() {
-    printf("MPU6050 3-axis acceleromter example program\n");
+void loop(ros::NodeHandle pn, ros::NodeHandle n) {
+
+    // if programming failed, don't try to do anything
+    if (!dmpReady) return;
+
+	ros::Time now = ros::Time::now();
+
+	//http://docs.ros.org/kinetic/api/sensor_msgs/html/msg/Imu.html
+	sensor_msgs::Imu imu_msg;
+    imu_msg.header.stamp = now;
+    imu_msg.header.frame_id = frame_id;
+
+    geometry_msgs::Vector3Stamped imu_euler_msg;
+    imu_euler_msg.header.stamp = now;
+    imu_euler_msg.header.frame_id = frame_id;
+
+    geometry_msgs::Vector3Stamped mag_msg;
+    mag_msg.header.stamp = now;
+    mag_msg.header.frame_id = frame_id;
+
+    // get current FIFO count
+    fifoCount = mpu.getFIFOCount();
+
+    if (fifoCount == 1024) {
+
+        // reset so we can continue cleanly
+        mpu.resetFIFO();
+        if(debug) printf("FIFO overflow!\n");
+
+    // otherwise, check for DMP data ready interrupt (this should happen frequently)
+    } else if (fifoCount >= 42) {
+
+    	// read a packet from FIFO
+        mpu.getFIFOBytes(fifoBuffer, packetSize);
+
+		// display quaternion values in easy matrix form: w x y z
+		mpu.dmpGetQuaternion(&q, fifoBuffer);
+		if(debug) printf("quat %7.2f %7.2f %7.2f %7.2f    ", q.w,q.x,q.y,q.z);
+
+	    imu_msg.orientation.x = q.x;
+		imu_msg.orientation.y = q.y;
+		imu_msg.orientation.z = q.z;
+		imu_msg.orientation.w = q.w;
+
+		imu_msg.linear_acceleration_covariance[0] = linear_acceleration_covariance;
+		imu_msg.linear_acceleration_covariance[4] = linear_acceleration_covariance;
+		imu_msg.linear_acceleration_covariance[8] = linear_acceleration_covariance;
+
+		imu_msg.angular_velocity_covariance[0] = angular_velocity_covariance;
+		imu_msg.angular_velocity_covariance[4] = angular_velocity_covariance;
+		imu_msg.angular_velocity_covariance[8] = angular_velocity_covariance;
+
+		imu_msg.orientation_covariance[0] = pitch_roll_covariance;
+		imu_msg.orientation_covariance[4] = pitch_roll_covariance;
+		imu_msg.orientation_covariance[8] = yaw_covariance;
+
+//        #ifdef OUTPUT_READABLE_EULER
+//            // display Euler angles in degrees
+//            mpu.dmpGetQuaternion(&q, fifoBuffer);
+//            mpu.dmpGetEuler(euler, &q);
+		//		imu_euler_msg.vector.y=-mpu.fusedEuler[VEC3_Y]*RAD_TO_DEGREE;
+		//		imu_euler_msg.vector.x=mpu.fusedEuler[VEC3_X]*RAD_TO_DEGREE;
+		//		imu_euler_msg.vector.z=-mpu.fusedEuler[VEC3_Z]*RAD_TO_DEGREE;
+		//		imu_euler_pub.publish(imu_euler_msg);
+//            if(debug) printf("euler %7.2f %7.2f %7.2f    ", euler[0] * 180/M_PI, euler[1] * 180/M_PI, euler[2] * 180/M_PI);
+//        #endif
+
+        #ifdef OUTPUT_READABLE_YAWPITCHROLL
+            // display Euler angles in degrees
+            mpu.dmpGetQuaternion(&q, fifoBuffer);
+            mpu.dmpGetGravity(&gravity, &q);
+            mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
+
+            imu_msg.angular_velocity.x = ypr[2] * 180/M_PI;
+            imu_msg.angular_velocity.y = ypr[1] * 180/M_PI;
+            imu_msg.angular_velocity.z = ypr[0] * 180/M_PI;
+
+            if(debug) printf("ypr  %7.2f %7.2f %7.2f    ", ypr[0] * 180/M_PI, ypr[1] * 180/M_PI, ypr[2] * 180/M_PI);
+        #endif
+
+        #ifdef OUTPUT_READABLE_REALACCEL
+            // display real acceleration, adjusted to remove gravity
+            mpu.dmpGetQuaternion(&q, fifoBuffer);
+            mpu.dmpGetAccel(&aa, fifoBuffer);
+            mpu.dmpGetGravity(&gravity, &q);
+            mpu.dmpGetLinearAccel(&aaReal, &aa, &gravity);
+
+            imu_msg.linear_acceleration.x = aaReal.x;
+            imu_msg.linear_acceleration.y = aaReal.y;
+            imu_msg.linear_acceleration.z = aaReal.z;
+
+            if(debug) printf("areal %6d %6d %6d    ", aaReal.x, aaReal.y, aaReal.z);
+        #endif
+
+		imu_pub.publish(imu_msg);
+
+//            mag_msg.vector.x=mpu.calibratedMag[VEC3_X];
+//            mag_msg.vector.y=mpu.calibratedMag[VEC3_Y];
+//            mag_msg.vector.z=mpu.calibratedMag[VEC3_Z];
+//            mag_pub.publish(mag_msg);
+
+//        #ifdef OUTPUT_READABLE_WORLDACCEL
+//            // display initial world-frame acceleration, adjusted to remove gravity
+//            // and rotated based on known orientation from quaternion
+//            mpu.dmpGetQuaternion(&q, fifoBuffer);
+//            mpu.dmpGetAccel(&aa, fifoBuffer);
+//            mpu.dmpGetGravity(&gravity, &q);
+//            mpu.dmpGetLinearAccelInWorld(&aaWorld, &aaReal, &q);
+//            if(debug) printf("aworld %6d %6d %6d    ", aaWorld.x, aaWorld.y, aaWorld.z);
+//        #endif
+
+		if(debug) printf("\n");
+    }
+}
+
+int main(int argc, char **argv){
+
+    ros::init(argc, argv, "mpu6050");
+
+    // Allows parameters passed in via <param>
+    ros::NodeHandle pn("~");
+
+    // Does not allow parameters being passed in.
+    ros::NodeHandle n;
+
+    signal(SIGINT, mySigintHandler);
+
+    ROS_INFO("Starting mpu6050_node...");
+
+    pn.param<int>("frequency", sample_rate, DEFAULT_SAMPLE_RATE_HZ);
+	std::cout << "Using sample rate: " << sample_rate << std::endl;
+
+    pn.param<std::string>("frame_id", frame_id, MPU_FRAMEID);
+    std::cout << "Using frame_id: " << frame_id << std::endl;
+
+    pn.param<int>("ax", ax, 0);
+    pn.param<int>("ay", ay, 0);
+    pn.param<int>("az", az, 0);
+    pn.param<int>("gx", gx, 0);
+    pn.param<int>("gy", gy, 0);
+    pn.param<int>("gz", gz, 0);
+
+    pn.param<bool>("ado", ado, false);
+    std::cout << "ADO: " << ado << std::endl << std::flush;
+
+    pn.param<bool>("debug", debug, false);
+    std::cout << "Debug: " << debug << std::endl << std::flush;
+
+    // NOISE PERFORMANCE: Power Spectral Density @10Hz, AFS_SEL=0 & ODR=1kHz 400 ug/√Hz (probably wrong)
+    pn.param("linear_acceleration_stdev", linear_acceleration_stdev_, (400 / 1000000.0) * 9.807 );
+
+    // Total RMS Noise: DLPFCFG=2 (100Hz) 0.05 º/s-rms (probably lower (?) @ 42Hz)
+    pn.param("angular_velocity_stdev", angular_velocity_stdev_, 0.05 * (M_PI / 180.0));
+
+    // 1 degree for pitch and roll
+    pn.param("pitch_roll_stdev", pitch_roll_stdev_, 1.0 * (M_PI / 180.0));
+
+    // 5 degrees for yaw
+    pn.param("yaw_stdev", yaw_stdev_, 5.0 * (M_PI / 180.0));
+
+    angular_velocity_covariance = angular_velocity_stdev_ * angular_velocity_stdev_;
+    linear_acceleration_covariance = linear_acceleration_stdev_ * linear_acceleration_stdev_;
+    pitch_roll_covariance = pitch_roll_stdev_ * pitch_roll_stdev_;
+    yaw_covariance = yaw_stdev_ * yaw_stdev_;
+
+    // ================================================================
+    // ===                      INITIAL SETUP                       ===
+    // ================================================================
+
+    printf("Initializing I2C...\n");
     I2Cdev::initialize();
 
     // verify connection
     printf("Testing device connections...\n");
-    printf(mpu.testConnection() ? "MPU6050 connection successful\n" : "MPU6050 connection failed\n");
+    mpu = MPU6050(ado ? 0x69 : 0x68);
+    if(mpu.testConnection()){
+        std::cout << "MPU6050 connection successful" << std::endl << std::flush;
+    }else{
+        std::cout << "MPU6050 connection failed" << std::endl << std::flush;
+        return 1;
+    }
 
     // initialize device
     printf("Initializing I2C devices...\n");
@@ -108,15 +310,21 @@ void setup() {
     printf("Initializing DMP...\n");
     devStatus = mpu.dmpInitialize();
 
-    // supply your own gyro offsets here, scaled for min sensitivity
-    /*
-    mpu.setXAccelOffset(mpu6050_offsets[0]);
-    mpu.setYAccelOffset(mpu6050_offsets[1]);
-    mpu.setZAccelOffset(mpu6050_offsets[2]);
-    mpu.setXGyroOffset(mpu6050_offsets[3]);
-    mpu.setYGyroOffset(mpu6050_offsets[4]);
-    mpu.setZGyroOffset(mpu6050_offsets[5]);
-    */
+    // Set accel offsets.
+    std::cout << "Setting X accel offset: " << ax << std::endl;
+    mpu.setXAccelOffset(ax);
+    std::cout << "Setting Y accel offset: " << ay << std::endl;
+    mpu.setYAccelOffset(ay);
+    std::cout << "Setting Z accel offset: " << az << std::endl;
+    mpu.setZAccelOffset(az);
+
+    // Set gyro offsets.
+    std::cout << "Setting X gyro offset: " << gx << std::endl;
+    mpu.setXGyroOffset(gx);
+    std::cout << "Setting Y gyro offset: " << gy << std::endl;
+    mpu.setYGyroOffset(gy);
+    std::cout << "Setting Z gyro offset: " << gz << std::endl;
+    mpu.setZGyroOffset(gz);
 
     // make sure it worked (returns 0 if so)
     if (devStatus == 0) {
@@ -142,96 +350,22 @@ void setup() {
         // (if it's going to break, usually the code will be 1)
         printf("DMP Initialization failed (code %d)\n", devStatus);
     }
-}
-
-
-// ================================================================
-// ===                    MAIN PROGRAM LOOP                     ===
-// ================================================================
-
-void loop() {
-    // if programming failed, don't try to do anything
-    if (!dmpReady) return;
-    // get current FIFO count
-    fifoCount = mpu.getFIFOCount();
-
-    if (fifoCount == 1024) {
-        // reset so we can continue cleanly
-        mpu.resetFIFO();
-        printf("FIFO overflow!\n");
-
-    // otherwise, check for DMP data ready interrupt (this should happen frequently)
-    } else if (fifoCount >= 42) {
-        // read a packet from FIFO
-        mpu.getFIFOBytes(fifoBuffer, packetSize);
-
-        #ifdef OUTPUT_READABLE_QUATERNION
-            // display quaternion values in easy matrix form: w x y z
-            mpu.dmpGetQuaternion(&q, fifoBuffer);
-            printf("quat %7.2f %7.2f %7.2f %7.2f    ", q.w,q.x,q.y,q.z);
-        #endif
-
-        #ifdef OUTPUT_READABLE_EULER
-            // display Euler angles in degrees
-            mpu.dmpGetQuaternion(&q, fifoBuffer);
-            mpu.dmpGetEuler(euler, &q);
-            printf("euler %7.2f %7.2f %7.2f    ", euler[0] * 180/M_PI, euler[1] * 180/M_PI, euler[2] * 180/M_PI);
-        #endif
-
-        #ifdef OUTPUT_READABLE_YAWPITCHROLL
-            // display Euler angles in degrees
-            mpu.dmpGetQuaternion(&q, fifoBuffer);
-            mpu.dmpGetGravity(&gravity, &q);
-            mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
-            printf("ypr  %7.2f %7.2f %7.2f    ", ypr[0] * 180/M_PI, ypr[1] * 180/M_PI, ypr[2] * 180/M_PI);
-        #endif
-
-        #ifdef OUTPUT_READABLE_REALACCEL
-            // display real acceleration, adjusted to remove gravity
-            mpu.dmpGetQuaternion(&q, fifoBuffer);
-            mpu.dmpGetAccel(&aa, fifoBuffer);
-            mpu.dmpGetGravity(&gravity, &q);
-            mpu.dmpGetLinearAccel(&aaReal, &aa, &gravity);
-            printf("areal %6d %6d %6d    ", aaReal.x, aaReal.y, aaReal.z);
-        #endif
-
-        #ifdef OUTPUT_READABLE_WORLDACCEL
-            // display initial world-frame acceleration, adjusted to remove gravity
-            // and rotated based on known orientation from quaternion
-            mpu.dmpGetQuaternion(&q, fifoBuffer);
-            mpu.dmpGetAccel(&aa, fifoBuffer);
-            mpu.dmpGetGravity(&gravity, &q);
-            mpu.dmpGetLinearAccelInWorld(&aaWorld, &aaReal, &q);
-            printf("aworld %6d %6d %6d    ", aaWorld.x, aaWorld.y, aaWorld.z);
-        #endif
-
-        printf("\n");
-    }
-}
-
-int main(int argc, char **argv){
-
-    ros::init(argc, argv, "mpu_6050");
-    ros::NodeHandle pn("~");
-    ros::NodeHandle n;
-    ROS_INFO("Starting mpu_6050_node...");
-
-    /****
-     *IMU parameters
-     ***/
-    pn.param<int>("frequency", sample_rate, DEFAULT_SAMPLE_RATE_HZ);
-    pn.param<std::string>("frame_id", frame_id, MPU_FRAMEID);
-
-    setup();
 
     usleep(100000);
 
+    imu_pub = n.advertise<sensor_msgs::Imu>("imu/data", 10);
+    imu_euler_pub = n.advertise<geometry_msgs::Vector3Stamped>("imu/euler", 10);
+	mag_pub = n.advertise<geometry_msgs::Vector3Stamped>("imu/mag", 10);
+
     ros::Rate r(sample_rate);
     while(ros::ok()){
-        loop();
+        loop(pn, n);
         ros::spinOnce();
         r.sleep();
     }
 
+    std::cout << "Shutdown." << std::endl << std::flush;
+
     return 0;
+
 }

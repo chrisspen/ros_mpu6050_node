@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <package>
-  <name>mpu6050</name>
+  <name>ros_mpu6050_node</name>
   <version>0.0.1</version>
   <description>The MPU6050 package</description>
 

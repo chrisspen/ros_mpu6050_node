@@ -1,0 +1,16 @@
+<!-- http://wiki.ros.org/roslaunch/XML/node -->
+<launch>
+   <node name="mpu6050_node" pkg="ros_mpu6050_node" type="mpu6050_node" output="screen">
+      <!--<rosparam file="$(find mypackage)/config/example.yaml" command="load" />-->
+      <param name="frequency" type="int" value="10" />
+      <param name="frame_id" type="str" value="base_imu" />
+      <param name="ax" type="int" value="0" />
+      <param name="ay" type="int" value="0" />
+      <param name="az" type="int" value="0" />
+      <param name="gx" type="int" value="0" />
+      <param name="gy" type="int" value="0" />
+      <param name="gz" type="int" value="0" />
+      <param name="ado" type="bool" value="false" />
+      <param name="debug" type="bool" value="false" />
+   </node>
+</launch>
