@@ -19,10 +19,11 @@ Then install [Bcm2835](http://www.airspayce.com/mikem/bcm2835/index.html):
     cd /tmp
     wget http://www.airspayce.com/mikem/bcm2835/bcm2835-1.50.tar.gz
     tar zxvf bcm2835-1.50.tar.gz
+    cd bcm2835-1.50
     ./configure
-    time make
+    make
     make check
-    make install
+    sudo make install
     
 Then clone the project into your ROS workspace via:
 
